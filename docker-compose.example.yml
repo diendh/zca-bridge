@@ -4,17 +4,24 @@
 services:
   bridge-db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: zca
       POSTGRES_USER: zca
       POSTGRES_PASSWORD: zca
     volumes: ["bridge_pg:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zca"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   zca-bridge:
     build: .
     restart: unless-stopped
     env_file: .env
-    depends_on: [bridge-db]
+    depends_on:
+      bridge-db: { condition: service_healthy }
     ports: ["4000:4000"]
     # Lưu trữ media bền (sống sót khi link Zalo hết hạn / bị xóa).
     volumes: ["zalo_media:/archive"]
