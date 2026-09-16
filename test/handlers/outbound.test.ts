@@ -118,6 +118,30 @@ describe("OutboundHandler", () => {
     expect(call[3].data.toString()).toBe("realbytes");
   });
 
+  it("does not rewrite a redirect that points to a different external storage origin (e.g. S3)", async () => {
+    // Reproduces chatwoot.minastik.com: ActiveStorage backed by S3, whose blobs/redirect
+    // 302s to a presigned S3 URL on a completely different host+query string.
+    const pool = agent.get("http://chatwoot-rails:3000");
+    pool.intercept({ path: "/rails/active_storage/blobs/redirect/sig/p.jpg", method: "GET" })
+      .reply(302, "", { headers: { location: "https://cdn.example-storage.com/bucket/obj?X-Amz-Signature=abc123" } });
+    // If the host-rewrite bug regresses, the S3 redirect gets its host swapped back to
+    // chatwoot-rails:3000 and this stray path is hit instead — Chatwoot's own server would
+    // 404 on it, exactly like the real chatwoot.minastik.com case.
+    pool.intercept({ path: "/bucket/obj?X-Amz-Signature=abc123", method: "GET" })
+      .reply(404, "not found");
+    agent.get("https://cdn.example-storage.com").intercept({ path: "/bucket/obj?X-Amz-Signature=abc123", method: "GET" })
+      .reply(200, Buffer.from("s3bytes"), { headers: { "content-type": "image/jpeg" } });
+    const d = deps();
+    const h = new OutboundHandler(d.sessions as any, d.accounts as any, (id) => d.inboxIndex.get(id) ?? null, d.mapping as any, "http://chatwoot-rails:3000");
+    await h.handle({
+      sourceId: "user:84900", content: "pic", chatwootMessageId: 9, inboxId: 3,
+      attachments: [{ dataUrl: "http://chatwoot-rails:3000/rails/active_storage/blobs/redirect/sig/p.jpg", fileType: "image" }],
+    });
+    const call = d.sessions.sendAttachment.mock.calls[0];
+    expect(call).toBeTruthy();
+    expect(call[3].data.toString()).toBe("s3bytes");
+  });
+
   it("posts an agent note and does not retry when OA reports an out-of-window send", async () => {
     const d = deps();
     const { OaWindowError } = await import("../../src/zalo-oa/sender.js");

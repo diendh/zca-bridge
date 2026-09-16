@@ -187,13 +187,18 @@ export class OutboundHandler {
   private async download(url: string): Promise<{ filename: string; data: Buffer } | null> {
     let target = this.toInternalUrl(url);
     if (!/^https?:\/\//i.test(target)) return null; // non-fetchable ref (e.g. data:) → permanent
+    const originalHost = (() => { try { return new URL(url).host; } catch { return null; } })();
     let res = await request(target, { method: "GET", headersTimeout: 10_000, bodyTimeout: 30_000 });
-    // Chatwoot's blobs/redirect data_url 302s to the signed disk URL. undici does not follow
-    // redirects here, so follow manually (rewriting each hop to the internal host).
+    // Chatwoot's blobs/redirect data_url 302s to the real object. Local-disk storage redirects
+    // within Chatwoot's own declared host (often internally unreachable, so it needs the same
+    // rewrite as the first hop); S3/GCS-backed storage redirects to a different external host with
+    // a presigned query string, which must be followed as-is — rewriting its host breaks the
+    // signature and Chatwoot's own server 404s on the resulting path.
     let hops = 0;
     while (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && hops < 3) {
       res.body.dump();
-      target = this.toInternalUrl(String(res.headers.location));
+      const location = new URL(String(res.headers.location), target).toString();
+      target = new URL(location).host === originalHost ? this.toInternalUrl(location) : location;
       res = await request(target, { method: "GET", headersTimeout: 10_000, bodyTimeout: 30_000 });
       hops++;
     }
