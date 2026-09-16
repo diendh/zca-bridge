@@ -204,7 +204,20 @@ export class InboundHandler {
     const content = built.content ? `${SELF_PREFIX}\n${built.content}` : SELF_PREFIX;
     const inReplyTo = await this.resolveQuote(accountId, msg);
     const appClient = await this.appClientFor(accountId);
-    const created = await appClient.createOutgoingMessage(conversationId, content, built.attachments, { inReplyTo });
+
+    let created: { id: number };
+    try {
+      created = await appClient.createOutgoingMessage(conversationId, content, built.attachments, { inReplyTo });
+    } catch (err) {
+      // Same recovery as the public-inbox path: the cached conversation was deleted in Chatwoot.
+      // Clear the stale mapping, create a fresh conversation, and retry once.
+      if (!isConversationGone(err)) throw err;
+      this.log.warn({ event: "conversation_recreated", accountId, sourceId, staleId: conversationId, err: errorMessage(err) }, "chatwoot conversation gone; recreating (self)");
+      await this.conversations.clear(accountId, sourceId);
+      const conv = await this.chatwoot.createConversation(identifier, sourceId);
+      await this.conversations.saveChatwootId(accountId, sourceId, conv.id);
+      created = await appClient.createOutgoingMessage(conv.id, content, built.attachments, { inReplyTo });
+    }
     await this.mapping.recordIfNew({
       zaloAccountId: accountId, zaloMsgId: msg.msgId, zaloThreadId: msg.threadId,
       direction: "out", chatwootMessageId: created.id, quoteSrc: msg.quoteSrc,

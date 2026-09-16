@@ -25,6 +25,7 @@ function deps() {
   const conversations = {
     getChatwootId: vi.fn(async (accId: number, sid: string) => store.get(`${accId}:${sid}`) ?? null),
     saveChatwootId: vi.fn(async (accId: number, sid: string, id: number) => { if (!store.has(`${accId}:${sid}`)) store.set(`${accId}:${sid}`, id); }),
+    clear: vi.fn(async (accId: number, sid: string) => { store.delete(`${accId}:${sid}`); }),
   };
   const enrich = vi.fn(async () => {});
   const archive = {
@@ -66,6 +67,29 @@ describe("InboundHandler", () => {
     expect(d.chatwoot.createMessage).not.toHaveBeenCalled();
     expect(d.appClient.createOutgoingMessage).toHaveBeenCalledWith(42, "📱 từ app Zalo\ntra loi tu app", undefined, { inReplyTo: undefined });
     expect(d.mapping.recordIfNew).toHaveBeenCalledWith(expect.objectContaining({ direction: "out", chatwootMessageId: 2001 }));
+  });
+
+  it("recreates the conversation and retries a self-message when the cached conversation is gone (404)", async () => {
+    const d = deps();
+    d.chatwoot.getContact = vi.fn(async () => ({ sourceId: "user:84900" }));
+    // Pre-seed the cache with a stale conversation id, as if it were created earlier and then
+    // deleted from Chatwoot directly (the bridge never proactively re-validates its cache).
+    await d.conversations.saveChatwootId(1, "user:84900", 42);
+    d.chatwoot.createConversation = vi.fn(async () => ({ id: 99 }));
+    d.appClient.createOutgoingMessage = vi.fn()
+      .mockRejectedValueOnce(new Error("postMessage failed: 404"))
+      .mockResolvedValueOnce({ id: 3001 });
+
+    await make(d).handle(1, "ident-1", {
+      ...baseMsg, isSelf: true, text: "tin nhan tu app", classified: { kind: "text", text: "tin nhan tu app" },
+    });
+
+    expect(d.conversations.clear).toHaveBeenCalledWith(1, "user:84900");
+    expect(d.chatwoot.createConversation).toHaveBeenCalledWith("ident-1", "user:84900");
+    expect(d.appClient.createOutgoingMessage).toHaveBeenNthCalledWith(
+      2, 99, expect.stringContaining("tin nhan tu app"), undefined, { inReplyTo: undefined },
+    );
+    expect(d.mapping.recordIfNew).toHaveBeenCalledWith(expect.objectContaining({ direction: "out", chatwootMessageId: 3001 }));
   });
 
   it("skips a self message that is an echo of a Chatwoot-originated send", async () => {
