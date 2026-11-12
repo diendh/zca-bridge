@@ -56,7 +56,9 @@ export class JobQueueRepo {
          WHERE next_attempt_at <= now()
            AND (status = 'pending'
                 OR (status = 'processing' AND updated_at < now() - interval '${STALE_PROCESSING}'))
-         ORDER BY id
+         -- Human-facing jobs (agent replies, undos) jump ahead of the inbound firehose;
+         -- otherwise a busy group feed delays outbound replies by minutes.
+         ORDER BY CASE kind WHEN 'outbound' THEN 0 WHEN 'undo' THEN 0 WHEN 'reaction' THEN 1 ELSE 2 END, id
          FOR UPDATE SKIP LOCKED
          LIMIT 1
        )
