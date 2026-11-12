@@ -53,4 +53,55 @@ d("JobQueueRepo", () => {
     expect(reclaimed?.id).toBe(job!.id);
     expect(reclaimed?.attempts).toBe(2);
   });
+
+  it("claims only the requested kinds (lanes)", async () => {
+    const q = new JobQueueRepo(pool);
+    await q.enqueue("inbound", "in-1", { n: 1 }, "4:t1");
+    await q.enqueue("outbound", "out-1", { n: 2 });
+    expect((await q.claimNext(["inbound"]))?.dedupKey).toBe("in-1");
+    expect(await q.claimNext(["inbound"])).toBeNull();
+    expect((await q.claimNext(["outbound", "undo"]))?.dedupKey).toBe("out-1");
+  });
+
+  it("keeps one lane ordered while other lanes run in parallel", async () => {
+    const q = new JobQueueRepo(pool);
+    await q.enqueue("inbound", "a-1", {}, "4:A");
+    await q.enqueue("inbound", "a-2", {}, "4:A");
+    await q.enqueue("inbound", "b-1", {}, "4:B");
+    const [x, y, z] = await Promise.all([q.claimNext(["inbound"]), q.claimNext(["inbound"]), q.claimNext(["inbound"])]);
+    expect(x?.dedupKey).toBe("a-1");
+    expect(y?.dedupKey).toBe("b-1"); // a-2 is held back while a-1 is in flight
+    expect(z).toBeNull();
+    await q.markDone(x!.id);
+    expect((await q.claimNext(["inbound"]))?.dedupKey).toBe("a-2");
+  });
+
+  it("does not let a stale in-flight job block its lane", async () => {
+    const q = new JobQueueRepo(pool);
+    await q.enqueue("inbound", "s-1", {}, "4:S");
+    await q.enqueue("inbound", "s-2", {}, "4:S");
+    const first = await q.claimNext();
+    await pool.query("UPDATE job_queue SET updated_at = now() - interval '10 minutes' WHERE id = $1", [first!.id]);
+    expect((await q.claimNext())?.dedupKey).toBe("s-1"); // the stale one is reclaimed first, in order
+  });
+
+  it("requeues jobs left in flight by a previous run", async () => {
+    const q = new JobQueueRepo(pool);
+    await q.enqueue("inbound", "r-1", {}, "4:R");
+    await q.claimNext();
+    expect(await q.requeueInFlight()).toBe(1);
+    expect((await q.claimNext())?.dedupKey).toBe("r-1");
+  });
+
+  it("purges only finished jobs past the retention window", async () => {
+    const q = new JobQueueRepo(pool);
+    await q.enqueue("outbound", "old-done", {});
+    await q.enqueue("outbound", "new-done", {});
+    await q.enqueue("outbound", "old-pending", {});
+    await pool.query("UPDATE job_queue SET status = 'done' WHERE dedup_key IN ('old-done', 'new-done')");
+    await pool.query("UPDATE job_queue SET updated_at = now() - interval '40 days' WHERE dedup_key IN ('old-done', 'old-pending')");
+    expect(await q.purgeDone(30)).toBe(1);
+    const left = await pool.query("SELECT dedup_key FROM job_queue ORDER BY id");
+    expect(left.rows.map((r) => r.dedup_key)).toEqual(["new-done", "old-pending"]);
+  });
 });

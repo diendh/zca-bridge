@@ -20,6 +20,8 @@ export interface AppConfig {
   mediaArchiveRoot: string;   // local directory for the durable media archive
   mediaTokenTtlDays: number;  // 0 = links never expire
   maxAttachmentBytes: number; // Chatwoot upload cap; larger media → archive + link
+  inboundConcurrency: number; // parallel inbound workers (outbound always has its own dedicated worker)
+  jobRetentionDays: number;   // finished jobs older than this are purged; 0 = keep forever
   oa?: OaConfig;              // Optional OA (Official Account) integration config
 }
 
@@ -58,6 +60,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     mediaArchiveRoot: env.MEDIA_ARCHIVE_ROOT ?? "/archive",
     mediaTokenTtlDays: Number(env.MEDIA_TOKEN_TTL_DAYS ?? "0"),
     maxAttachmentBytes: Number(env.CHATWOOT_MAX_ATTACHMENT_MB ?? "40") * 1024 * 1024,
+    inboundConcurrency: Math.max(1, Number(env.INBOUND_CONCURRENCY ?? "4") || 1),
+    jobRetentionDays: Math.max(0, Number(env.JOB_RETENTION_DAYS ?? "30") || 0),
     oa,
   };
 }

@@ -175,25 +175,27 @@ async function main(): Promise<void> {
   const reactions = new ReactionHandler(conversations, mapping, appClientFor);
   const undos = new UndoHandler(conversations, mapping, appClientFor);
 
-  // Wake the worker the instant a job is enqueued, so processing does not wait for the poll tick.
+  // Wake the workers the instant a job is enqueued, so processing does not wait for the poll tick.
   let wakeWorker: () => void = () => {};
+  // Zalo-side events of one conversation share a lane so parallel workers keep them in order.
+  const laneOf = (accountId: number, threadId: string): string => `${accountId}:${threadId}`;
   let runStartupBackfill: () => void = () => {};
 
   // DURABLE PATH: a Zalo message is persisted to job_queue before any Chatwoot call.
   const onInbound = (accountId: number, msg: IncomingMessage): void => {
-    jobs.enqueue("inbound", `${accountId}:${msg.msgId}`, { accountId, msg })
+    jobs.enqueue("inbound", `${accountId}:${msg.msgId}`, { accountId, msg }, laneOf(accountId, msg.threadId))
       .then(() => wakeWorker())
       .catch((err) => app.log.error({ err }, "failed to enqueue inbound"));
   };
 
   const onReaction = (accountId: number, evt: ReactionEvent): void => {
-    jobs.enqueue("reaction", `${accountId}:${evt.reactedMsgId}:${evt.icon}:${evt.isSelf}`, { accountId, evt })
+    jobs.enqueue("reaction", `${accountId}:${evt.reactedMsgId}:${evt.icon}:${evt.isSelf}`, { accountId, evt }, laneOf(accountId, evt.threadId))
       .then(() => wakeWorker())
       .catch((err) => app.log.error({ err }, "failed to enqueue reaction"));
   };
 
   const onUndo = (accountId: number, evt: UndoEvent): void => {
-    jobs.enqueue("undo", `${accountId}:${evt.recalledMsgId}`, { accountId, evt })
+    jobs.enqueue("undo", `${accountId}:${evt.recalledMsgId}`, { accountId, evt }, laneOf(accountId, evt.threadId))
       .then(() => wakeWorker())
       .catch((err) => app.log.error({ err }, "failed to enqueue undo"));
   };
@@ -229,8 +231,15 @@ async function main(): Promise<void> {
     await notifyOutbound(job.payload as OutgoingEvent, deadLetterNote(job.payload as OutgoingEvent, error));
   };
 
-  const worker = new Worker(jobs, dispatch, onPermanentFailure);
-  wakeWorker = () => worker.wake();
+  // Two lanes. Agent replies (and recall/reaction events) get a dedicated worker, so they never queue
+  // behind a slow inbound job (media download, Chatwoot upload). Inbound runs N-wide in parallel
+  // across conversations; lane_key keeps each conversation strictly ordered.
+  const workers = [
+    new Worker(jobs, dispatch, onPermanentFailure, 250, app.log, ["outbound", "undo", "reaction"]),
+    ...Array.from({ length: cfg.inboundConcurrency }, () =>
+      new Worker(jobs, dispatch, onPermanentFailure, 250, app.log, ["inbound"])),
+  ];
+  wakeWorker = () => { for (const w of workers) w.wake(); };
 
   const resolveProxyOptions = async (accountId: number): Promise<ProxyOptions> => {
     const acc = await accounts.findById(accountId);
@@ -375,8 +384,21 @@ async function main(): Promise<void> {
   }
 
   await app.listen({ host: "0.0.0.0", port: cfg.port });
-  worker.start();
+  const requeued = await jobs.requeueInFlight();
+  if (requeued > 0) app.log.info({ event: "jobs_requeued", count: requeued }, "requeued jobs left in-flight by the previous run");
+  for (const w of workers) w.start();
+  app.log.info({ event: "workers_started", inbound: cfg.inboundConcurrency, outbound: 1 }, "job workers started");
   runStartupBackfill();
+
+  const purgeDone = (): void => {
+    if (cfg.jobRetentionDays <= 0) return;
+    jobs.purgeDone(cfg.jobRetentionDays)
+      .then((n) => { if (n > 0) app.log.info({ event: "jobs_purged", count: n }, "purged finished jobs"); })
+      .catch((err) => app.log.error({ err }, "job purge failed"));
+  };
+  purgeDone();
+  const purgeTimer = setInterval(purgeDone, 60 * 60 * 1000);
+  purgeTimer.unref();
 
   const indexRefresh = setInterval(() => { refreshIndex().catch((err) => app.log.error({ err }, "index refresh failed")); }, 30_000);
   indexRefresh.unref();
@@ -386,7 +408,8 @@ async function main(): Promise<void> {
   cookieTimer.unref();
 
   async function shutdown(): Promise<void> {
-    worker.stop();
+    for (const w of workers) w.stop();
+    clearInterval(purgeTimer);
     clearInterval(indexRefresh);
     clearInterval(cookieTimer);
     try { await supervisor.persistAllCookies(); } catch { /* ignore */ }
