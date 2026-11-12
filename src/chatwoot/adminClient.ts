@@ -1,4 +1,5 @@
 import { request } from "undici";
+import { CHATWOOT_TIMEOUTS } from "./client.js";
 
 export type ChatwootAdminErrorCode =
   | "chatwoot_config_missing"
@@ -33,7 +34,7 @@ export class ChatwootAdminClient {
       throw new ChatwootAdminError("chatwoot_config_missing", "Chatwoot base URL and API access token are required");
     }
     const res = await request(`${baseUrl}/api/v1/profile`, {
-      method: "GET",
+      ...CHATWOOT_TIMEOUTS, method: "GET",
       headers: { api_access_token: this.accessToken },
     });
     if (res.statusCode === 401 || res.statusCode === 403) {

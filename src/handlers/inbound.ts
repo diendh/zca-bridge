@@ -236,18 +236,29 @@ export class InboundHandler {
     const prefix = this.groupSenderPrefix(msg);
     if (c.kind !== "media") return { content: prefix + c.text };
 
-    const { bytes, contentType: downloaded } = await downloadMedia(c.href);
-    const contentType = contentTypeFor(c.mediaType, c.filename, downloaded);
-    const filename = alignExtension(c.filename, contentType);
-    const key = archiveKey(accountId, msg, filename);
-    await this.archive.put(key, bytes, contentType);
+    try {
+      const { bytes, contentType: downloaded } = await downloadMedia(c.href);
+      const contentType = contentTypeFor(c.mediaType, c.filename, downloaded);
+      const filename = alignExtension(c.filename, contentType);
+      const key = archiveKey(accountId, msg, filename);
+      await this.archive.put(key, bytes, contentType);
 
-    if (bytes.length <= this.maxAttachmentBytes) {
-      return { content: prefix + c.caption, attachments: [{ filename, content: bytes, contentType }] };
+      if (bytes.length <= this.maxAttachmentBytes) {
+        return { content: prefix + c.caption, attachments: [{ filename, content: bytes, contentType }] };
+      }
+      const mb = Math.ceil(bytes.length / (1024 * 1024));
+      const url = this.archive.urlFor(key);
+      return { content: prefix + `${MEDIA_ICON[c.mediaType]} ${MEDIA_LABEL[c.mediaType]} (${mb}MB) — quá lớn để hiển thị. Tải tại: ${url}` };
+    } catch (err) {
+      // Zalo CDN links expire (400) or time out. Never fail the whole message for this: relay the
+      // caption/text plus a placeholder so text still reaches Chatwoot instead of jamming the queue.
+      this.log.warn(
+        { event: "attachment_failed", accountId, msgId: msg.msgId, href: c.href, err: errorMessage(err) },
+        "media download failed; relaying text without attachment"
+      );
+      const caption = c.caption ? c.caption + "\n" : "";
+      return { content: prefix + caption + `${MEDIA_ICON[c.mediaType]} ${MEDIA_LABEL[c.mediaType]} (không tải được — link Zalo hết hạn)` };
     }
-    const mb = Math.ceil(bytes.length / (1024 * 1024));
-    const url = this.archive.urlFor(key);
-    return { content: prefix + `${MEDIA_ICON[c.mediaType]} ${MEDIA_LABEL[c.mediaType]} (${mb}MB) — quá lớn để hiển thị. Tải tại: ${url}` };
   }
 
   // In a group, every message is relayed under the single group contact, so prepend the sender's

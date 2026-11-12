@@ -6,7 +6,7 @@ const envCfg = {
   databaseUrl: "x", chatwootBaseUrl: "x", credentialsKey: Buffer.alloc(32),
   port: 4000, publicBaseUrl: "x",
   chatwootApiAccessToken: "ENVTOK", chatwootAccountId: 9,
-  webhookSecret: null, mediaArchiveRoot: "/a", mediaTokenTtlDays: 0, maxAttachmentBytes: 1,
+  webhookSecret: null, mediaArchiveRoot: "/a", mediaTokenTtlDays: 0, maxAttachmentBytes: 1, inboundConcurrency: 1, jobRetentionDays: 0,
   oa: undefined,
 } as unknown as AppConfig;
 

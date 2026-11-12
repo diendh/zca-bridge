@@ -145,16 +145,19 @@ describe("InboundHandler", () => {
     }
   });
 
-  it("throws (so the queue retries) when a real attachment fails to download", async () => {
+  it("relays the caption with a placeholder (no attachment) when the media download fails", async () => {
     const prev = getGlobalDispatcher();
     const mock = new MockAgent(); mock.disableNetConnect(); setGlobalDispatcher(mock);
     mock.get("https://cdn.zalo.test").intercept({ path: "/img.jpg", method: "GET" }).reply(500, "");
     try {
       const d = deps();
-      const classified: ClassifiedMessage = { kind: "media", mediaType: "image", href: "https://cdn.zalo.test/img.jpg", filename: "img.jpg", caption: "" };
-      await expect(make(d).handle(1, "ident-1", { ...baseMsg, text: "", classified }))
-        .rejects.toThrow(/attachment download failed/);
-      expect(d.chatwoot.createMessage).not.toHaveBeenCalled();
+      const classified: ClassifiedMessage = { kind: "media", mediaType: "image", href: "https://cdn.zalo.test/img.jpg", filename: "img.jpg", caption: "xem ảnh" };
+      // An expired/failed Zalo CDN link must not jam the queue with retries: the text still gets through.
+      await make(d).handle(1, "ident-1", { ...baseMsg, text: "", classified });
+      const call = d.chatwoot.createMessage.mock.calls[0][3];
+      expect(call.attachments).toBeUndefined();
+      expect(call.content).toContain("xem ảnh");
+      expect(call.content).toContain("không tải được");
     } finally {
       await mock.close(); setGlobalDispatcher(prev);
     }

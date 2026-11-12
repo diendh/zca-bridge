@@ -1,4 +1,4 @@
-import type { Job, JobQueueRepo } from "../store/jobQueueRepo.js";
+import type { Job, JobKind, JobQueueRepo } from "../store/jobQueueRepo.js";
 
 const BASE_SECONDS = 1;
 const CAP_SECONDS = 300;
@@ -20,7 +20,8 @@ export class Worker {
     private dispatch: DispatchFn,
     private onPermanentFailure: PermanentFailureFn,
     private pollIntervalMs = 250,
-    private log: { error: (obj: unknown, msg?: string) => void } = { error: () => {} }
+    private log: { error: (obj: unknown, msg?: string) => void } = { error: () => {} },
+    private kinds?: JobKind[] // lane: only claim these kinds (all kinds when omitted)
   ) {}
 
   /** Interrupt the idle wait so a freshly enqueued job is claimed without waiting for the poll. */
@@ -45,7 +46,7 @@ export class Worker {
 
   /** Process at most one job. Returns true if a job was processed, false if the queue was empty. */
   async tick(): Promise<boolean> {
-    const job = await this.queue.claimNext();
+    const job = await this.queue.claimNext(this.kinds);
     if (!job) return false;
     try {
       await this.dispatch(job);

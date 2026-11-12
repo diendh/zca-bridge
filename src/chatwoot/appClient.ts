@@ -1,6 +1,7 @@
 import { request } from "undici";
 import type { Attachment } from "./client.js";
 import { buildMultipart } from "./multipart.js";
+import { CHATWOOT_TIMEOUTS } from "./client.js";
 
 export class ChatwootAppClient {
   constructor(
@@ -19,7 +20,7 @@ export class ChatwootAppClient {
     const payload: Record<string, unknown> = { content, message_type: "outgoing", private: true };
     if (opts.inReplyTo != null) payload.content_attributes = { in_reply_to: opts.inReplyTo };
     const res = await request(url, {
-      method: "POST",
+      ...CHATWOOT_TIMEOUTS, method: "POST",
       headers: { "content-type": "application/json", api_access_token: this.accessToken as string },
       body: JSON.stringify(payload),
     });
@@ -62,7 +63,7 @@ export class ChatwootAppClient {
     }
     const url = `${this.baseUrl}/api/v1/accounts/${this.accountId}/conversations/${conversationId}/messages/${messageId}`;
     const res = await request(url, {
-      method: "DELETE",
+      ...CHATWOOT_TIMEOUTS, method: "DELETE",
       headers: { api_access_token: this.accessToken as string },
     });
     if (res.statusCode >= 400) { res.body.dump(); throw new Error(`deleteMessage failed: ${res.statusCode}`); }
@@ -88,7 +89,7 @@ export class ChatwootAppClient {
         attachments.map((a) => ({ name: "attachments[]", filename: a.filename, contentType: a.contentType, content: a.content })),
       );
       const res = await request(url, {
-        method: "POST",
+        ...CHATWOOT_TIMEOUTS, method: "POST",
         headers: { "content-type": contentType, "content-length": String(body.length), api_access_token: token },
         body,
       });
@@ -99,7 +100,7 @@ export class ChatwootAppClient {
     const payload: Record<string, unknown> = { content, message_type: messageType, private: false };
     if (inReplyTo != null) payload.content_attributes = { in_reply_to: inReplyTo };
     const res = await request(url, {
-      method: "POST",
+      ...CHATWOOT_TIMEOUTS, method: "POST",
       headers: { "content-type": "application/json", api_access_token: token },
       body: JSON.stringify(payload),
     });

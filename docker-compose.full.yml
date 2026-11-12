@@ -39,7 +39,16 @@ services:
     ports: ["4000:4000"]
     # Durable media archive (survives Zalo link expiry / deletion).
     volumes: ["zalo_media:/archive"]
+    # Chatwoot posts agent replies to http://zca-bridge:4000/webhooks/chatwoot/... (Channel::Api webhook).
+    # That hostname only resolves from Chatwoot's network, so the bridge must stay dual-homed.
+    networks:
+      - default
+      - chatwoot_default
 
 volumes:
   bridge_pg:
   zalo_media:
+
+networks:
+  chatwoot_default:
+    external: true

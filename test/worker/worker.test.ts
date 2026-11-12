@@ -59,6 +59,13 @@ describe("Worker.tick", () => {
     expect(String((onPermanentFailure.mock.calls[0] as unknown[])[1])).toContain("boom-cause");
   });
 
+  it("claims only its lane's kinds", async () => {
+    const q = { claimNext: vi.fn(async () => null), markDone: vi.fn(), markRetry: vi.fn() };
+    const w = new Worker(q as any, vi.fn(), vi.fn(), 250, undefined, ["outbound", "undo"]);
+    await w.tick();
+    expect(q.claimNext).toHaveBeenCalledWith(["outbound", "undo"]);
+  });
+
   it("returns false when there is nothing to claim", async () => {
     const q = { claimNext: vi.fn(async () => null), markDone: vi.fn(), markRetry: vi.fn() };
     const w = new Worker(q as any, vi.fn(), vi.fn());
